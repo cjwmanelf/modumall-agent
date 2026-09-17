@@ -351,8 +351,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
                 process_chat, inputs=[msg_input, chatbot, session_id_state],
                 outputs=[msg_input, chatbot, route_box, conf_box, action_box, tools_box, guard_box, raw_json]
             )
-
-        with gr.Tab("📊 대회 성능 평가 벤치마크 (Evaluation)"):
+        with gr.Tab("📊 평가 벤치마크"):
             gr.Markdown("### 🏆 2대 핵심 성능 지표 실시간 측정")
             with gr.Row():
                 with gr.Column():

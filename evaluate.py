@@ -30,7 +30,8 @@ from config import BASE, CONF_THRESHOLD, LABELS4, ensure_data
 def eval_router(report=True):
     from router import app, build, rule_classify
 
-    inq = pd.read_csv(BASE / "customer_inquiries.csv")
+    inq_path = BASE / "eval_set.csv" if (BASE / "eval_set.csv").exists() else (BASE / "customer_inquiries.csv")
+    inq = pd.read_csv(inq_path)
     ans = pd.read_csv(BASE / "routing_answers.csv")
     gold = inq.merge(ans, on="qa_id")
     ev = gold[gold["split"] == "eval"].reset_index(drop=True)
@@ -105,7 +106,8 @@ def score_turn(expect, answer, tools_called, action):
 
 
 def load_cases():
-    gold = json.loads((BASE / "answer_goldenset_multiturn.json").read_text(encoding="utf-8"))
+    gold_path = BASE / "answer_gold.json" if (BASE / "answer_gold.json").exists() else (BASE / "answer_goldenset_multiturn.json")
+    gold = json.loads(gold_path.read_text(encoding="utf-8"))
     cases = []
     for c in gold["conversations"]:
         q = next(t for t in c["turns"] if t["role"] == "customer")

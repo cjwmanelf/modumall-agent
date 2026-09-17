@@ -8,7 +8,8 @@ import re
 
 from config import BASE
 
-POLICY = BASE / "policy_modumall.md"   # 섹션 2에서 이미 받아 두었다
+DOCS_POLICY = BASE.parent / "docs" / "policy_modumall.md"
+POLICY = DOCS_POLICY if DOCS_POLICY.exists() else (BASE / "policy_modumall.md")
 
 
 def split_sections(text):

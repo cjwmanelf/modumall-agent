@@ -85,8 +85,8 @@ cp .env.example .env        # .env 파일에 사용할 LLM API Key 입력
 
 ### 2. 실행 모드
 ```bash
-# ① 웹 GUI 대시보드 실행 (추천)
-python app_gui.py
+# ① 웹 GUI 대시보드 실행 (app.py 또는 app_gui.py 둘 다 가능)
+python app.py
 
 # ② 콘솔 대화 모드
 python chat.py
@@ -99,8 +99,10 @@ python evaluate.py
 
 ## 🗺️ 파일 지도 — 어디를 고치면 무엇이 움직이나
 
-| 파일 | 무엇이 들어 있나 | 고치면 움직이는 것 |
+| 파일/디렉토리 | 무엇이 들어 있나 | 고치면 움직이는 것 |
 | :--- | :--- | :--- |
+| **`docs/`** | 공식 상담원 업무 매뉴얼 문서 (`policy_modumall.md`) | 답변 근거 및 정책 지침 원문 |
+| **`data/`** | 라우팅 평가셋(`eval_set.csv`), 골든셋(`answer_gold.json`), 전산 DB | 평가 문항 및 채점 기준, 모의 DB |
 | **`config.py`** | 멀티 LLM 제공자, 모델 사양, 임계값, 동시 호출 수 | 전체 시스템 엔진 및 비용/속도 |
 | **`prompts.py`** | 라우팅 지침(`ROUTE_GUIDE`) · 답변 규칙(`ANSWER_RULES`) | **분류 정확도 & 답변 통과율 (가장 큰 영향)** |
 | **`router.py`** | 의도 분류 그래프 (`classify` · `gate`) | ① 의도 분류 정확도 |
@@ -110,4 +112,5 @@ python evaluate.py
 | **`guardrail.py`** | 답변 속 숫자의 출처 역추적 검사기 | ② 답변 — `forbid` 위반 및 환각 차단 |
 | **`agent.py`** | 전체 파이프라인 통합 그래프 | 전체 대화 흐름 (되묻기 `ASK`, 이관 `ESCALATE`) |
 | **`evaluate.py`** | 2대 지표(분류 정확도, 답변 통과율) 측정 및 채점기 | 채점 기준 및 벤치마크 |
-| **`app_gui.py`** | Gradio 웹 인터페이스 & 관제 대시보드 | 사용자 UI, 멀티 LLM 설정, 벤치마크 뷰어 |
+| **`app.py`** / **`app_gui.py`** | Gradio 웹 인터페이스 & 관제 대시보드 | 사용자 UI, 멀티 LLM 설정, 벤치마크 뷰어 |
+| **`REPORT.md`** | 7대 핵심 항목 정리된 최종 기술 보고서 | 프로젝트 기술 설계 및 분석 일지 |

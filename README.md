@@ -36,7 +36,7 @@
 
 ### 1. 카테고리를 정하고 문서와 연결하기
 - **4+1 카테고리 구성**: 실제 쇼핑몰 CS 업무 분과 및 규정 구조에 맞추어 `ORDER_PLACE`(주문/구매), `PRODUCT_INFO`(상품스펙), `SHIPPING`(배송), `RETURN_REFUND`(반품/환불), 그리고 어디에도 속하지 않는 예외를 위한 `OTHER`를 정의했습니다.
-- **문서 매핑표 ([`context.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/context.py))**: `SECTION_MAP`을 통해 각 카테고리가 매뉴얼 1~7장의 어느 조항을 참조해야 하는지 1:1 매핑표를 구축하고, 동적으로 프롬프트를 조합합니다.
+- **문서 매핑표 ([`context.py`](context.py))**: `SECTION_MAP`을 통해 각 카테고리가 매뉴얼 1~7장의 어느 조항을 참조해야 하는지 1:1 매핑표를 구축하고, 동적으로 프롬프트를 조합합니다.
 
 ### 2. 평가셋 만들기
 - **균형 잡힌 골든셋 구축**: `answer_goldenset_multiturn.json`에 20건 이상(34건)의 다회차 문의 문항을 카테고리별로 고르게 배치했습니다.
@@ -48,20 +48,20 @@
 - **엄격한 데이터 분리**: 프롬프트 예시용 `fewshot`(40건)과 성능 측정용 `eval`(120건 / 34건)을 엄격히 분리하여 데이터 오염을 방지했습니다.
 
 ### 3. 파이프라인 구현
-- **단일 LangGraph 파이프라인 ([`agent.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/agent.py))**: `판정(route) → 근거 조립 및 조회(answer) → 수치 검증(guard) → 답변 출력/이관`을 하나의 유기적인 상태 그래프로 연결했습니다.
-- **분류(`classify`)와 게이트(`gate`)의 분리 ([`router.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/router.py))**: 카테고리를 예측하는 LLM 노드와, 확신도를 보고 이관 여부를 결정하는 정책 노드를 분리하여 유연한 임계값 튜닝을 지원합니다.
-- **기계적 수치 검사기 ([`guardrail.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/guardrail.py))**: 정규식을 통해 답변 속 숫자를 추출하고 허용 집합(DB 결과 + 매뉴얼 고정값 + 산술 연산값)과 대조 검사합니다.
+- **단일 LangGraph 파이프라인 ([`agent.py`](agent.py))**: `판정(route) → 근거 조립 및 조회(answer) → 수치 검증(guard) → 답변 출력/이관`을 하나의 유기적인 상태 그래프로 연결했습니다.
+- **분류(`classify`)와 게이트(`gate`)의 분리 ([`router.py`](router.py))**: 카테고리를 예측하는 LLM 노드와, 확신도를 보고 이관 여부를 결정하는 정책 노드를 분리하여 유연한 임계값 튜닝을 지원합니다.
+- **기계적 수치 검사기 ([`guardrail.py`](guardrail.py))**: 정규식을 통해 답변 속 숫자를 추출하고 허용 집합(DB 결과 + 매뉴얼 고정값 + 산술 연산값)과 대조 검사합니다.
 
 ### 4. 측정 (Evaluation)
 - **도구 호출 적절성**: 기대 도구와 실제 호출 도구 집합이 정확히 일치할 때만 점수를 부여합니다.
 - **답변 적절성**: `must`는 모두 충족하고 `forbid`는 단 하나도 위반하지 않았는지를 채점합니다.
-- **채점기 자기 검증 ([`evaluate.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/evaluate.py))**: 평가 시작 전 모범 답안(Reference)을 먼저 채점하여 채점기 자체의 무결성을 항상 보증합니다.
+- **채점기 자기 검증 ([`evaluate.py`](evaluate.py))**: 평가 시작 전 모범 답안(Reference)을 먼저 채점하여 채점기 자체의 무결성을 항상 보증합니다.
 - **실패 사례 분석 및 기록**: 실패 문항의 원인을 `fails_detail.json` 및 GUI 대시보드에 기록하며, 한 번에 하나씩 변경하며 성능 추이를 추적했습니다.
 
 ### 5. 데모 만들기
-- **Gradio 웹 대시보드 ([`app_gui.py`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/app_gui.py))**: 브라우저에서 직접 대화하고 원클릭 테스트 질문을 실행할 수 있는 대화형 웹 UI를 제공합니다.
+- **Gradio 웹 대시보드 ([`app_gui.py`](app_gui.py))**: 브라우저에서 직접 대화하고 원클릭 테스트 질문을 실행할 수 있는 대화형 웹 UI를 제공합니다.
 - **투명한 내부 관제 패널**: 고객 답변뿐만 아니라 분류된 라우트, 확신도 점수, 판정 행동(`Action`), 호출된 도구 목록, 가드레일 검증 통과 여부, 어드민 DB 원본 JSON 데이터를 실시간으로 투명하게 공개합니다.
-- **보안 격리**: API 키는 [`.env`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/.env) 파일에만 저장되며 [`.gitignore`](file:///c:/Users/cjwma/OneDrive/바탕%20화면/modumall-agent/.gitignore)를 통해 GitHub에 절대 유출되지 않습니다.
+- **보안 격리**: API 키는 [`.env`](.env.example) 템플릿 안내에 따라 개별 로컬 환경에서만 관리되며 [`.gitignore`](.gitignore)를 통해 GitHub에 절대 유출되지 않습니다.
 
 ---
 

@@ -373,8 +373,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
 
             btn_router.click(run_eval_router, outputs=[m_acc, m_f1, eval_visual, eval_log])
             btn_answer.click(run_eval_answer, outputs=[m_pass, eval_visual, eval_log])
-
-        with gr.Tab("🏆 대회 공식 실험 기록서 (Experiment Log)"):
+        with gr.Tab("🏆 공식 실험 기록서"):
             gr.Markdown("""
             ## 🏆 모두몰 고객 응대 AI 에이전트 최적화 공식 실험 기록서
 

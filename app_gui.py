@@ -9,75 +9,173 @@ from contextlib import redirect_stdout
 
 import gradio as gr
 from agent import chat_app
-from config import ANSWER_MODEL, BASE, MODEL, ensure_data
+from config import (
+    ANSWER_MODEL, BASE, MODEL, LLM_PROVIDER, PROVIDER_PRESETS,
+    create_chat_model, ensure_data
+)
 from eval_views import get_initial_eval_html, render_answer_eval_html, render_router_eval_html
 from evaluate import eval_answer, eval_router
 
 ensure_data()
 
 
-def get_masked_api_key():
-    k = os.environ.get("OPENAI_API_KEY", "").strip()
+def get_masked_val(key_name: str) -> str:
+    k = os.environ.get(key_name, "").strip()
     if not k:
-        return "설정되지 않음 (미등록)"
-    if len(k) > 15:
-        return f"{k[:7]}...{k[-4:]}"
+        return "미등록"
+    if key_name == "OLLAMA_BASE_URL":
+        return k
+    if len(k) > 12:
+        return f"{k[:6]}...{k[-4:]}"
     return "***"
 
 
-def update_api_key(new_key: str):
-    new_key = (new_key or "").strip()
-    if not new_key:
-        return "⚠️ 변경할 API Key를 입력해 주세요.", get_masked_api_key()
-    
-    # 1. 환경 변수 업데이트
-    os.environ["OPENAI_API_KEY"] = new_key
-    
-    # 2. .env 파일 영구 저장
-    env_file = BASE.parent / ".env"
-    try:
-        if env_file.exists():
-            content = env_file.read_text(encoding="utf-8")
-            if "OPENAI_API_KEY=" in content:
-                content = re.sub(r"OPENAI_API_KEY=.*", f"OPENAI_API_KEY={new_key}", content)
-            else:
-                content += f"\nOPENAI_API_KEY={new_key}\n"
-            env_file.write_text(content, encoding="utf-8")
-        else:
-            env_file.write_text(f"OPENAI_API_KEY={new_key}\n", encoding="utf-8")
-    except Exception as e:
-        return f"⚠️ .env 파일 저장 중 에러: {e}", get_masked_api_key()
-        
-    # 3. 모델 체인 재초기화
+def get_provider_status_text():
+    p = os.environ.get("MODU_LLM_PROVIDER", "openai").lower()
+    preset = PROVIDER_PRESETS.get(p, PROVIDER_PRESETS["openai"])
+    label = preset["label"]
+    masked = get_masked_val(preset["env_key"])
+    r_model = os.environ.get("MODU_MODEL", preset["router"])
+    a_model = os.environ.get("MODU_ANSWER_MODEL", preset["answer"])
+    return f"현재 활성: **{label}** | 연결정보: `{masked}` | 라우터: `{r_model}` | 답변: `{a_model}`"
+
+
+def reload_system_models():
+    """변경된 환경변수를 바탕으로 런타임 라우터와 답변 에이전트 체인을 리로드한다."""
     try:
         import router
         import answer
-        from langchain.chat_models import init_chat_model
-        
+        import config
+
+        p = os.environ.get("MODU_LLM_PROVIDER", "openai").lower()
+        preset = PROVIDER_PRESETS.get(p, PROVIDER_PRESETS["openai"])
+        config.LLM_PROVIDER = p
+        config.MODEL = os.environ.get("MODU_MODEL", preset["router"])
+        config.ANSWER_MODEL = os.environ.get("MODU_ANSWER_MODEL", preset["answer"])
+
         router._router_chain = None
-        answer.llm_t = init_chat_model(
-            ANSWER_MODEL, temperature=0, reasoning_effort="none",
-            timeout=60, max_retries=2
-        ).bind_tools(answer.LC_TOOLS)
+        answer.llm_t = answer.get_answer_llm()
         answer.tool_app = answer.build_tool_graph()
+        return True, "모델 엔진 정상 리로드 완료"
     except Exception as e:
-        pass
-        
-    masked = get_masked_api_key()
-    return f"✅ API Key가 성공적으로 변경 및 저장되었습니다! ({masked})", masked
+        return False, f"리로드 중 에러: {e}"
 
 
-def test_api_key():
-    k = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not k:
-        return "⚠️ 현재 등록된 API Key가 없습니다. 키를 먼저 입력해 주세요."
+def update_env_file(updates: dict):
+    env_file = BASE.parent / ".env"
+    lines = []
+    if env_file.exists():
+        content = env_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+
+    written_keys = set()
+    new_lines = []
+    for line in lines:
+        matched = False
+        for k, v in updates.items():
+            if line.startswith(f"{k}=") or line.startswith(f"#{k}="):
+                new_lines.append(f"{k}={v}")
+                written_keys.add(k)
+                matched = True
+                break
+        if not matched:
+            new_lines.append(line)
+
+    for k, v in updates.items():
+        if k not in written_keys:
+            new_lines.append(f"{k}={v}")
+
+    env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def save_multi_settings(provider, openai_k, anthropic_k, gemini_k, ollama_url, router_m, answer_m):
+    p = provider.lower()
+    if p not in PROVIDER_PRESETS:
+        p = "openai"
+
+    updates = {"MODU_LLM_PROVIDER": p}
+    os.environ["MODU_LLM_PROVIDER"] = p
+
+    if openai_k and openai_k.strip():
+        k = openai_k.strip()
+        updates["OPENAI_API_KEY"] = k
+        os.environ["OPENAI_API_KEY"] = k
+
+    if anthropic_k and anthropic_k.strip():
+        k = anthropic_k.strip()
+        updates["ANTHROPIC_API_KEY"] = k
+        os.environ["ANTHROPIC_API_KEY"] = k
+
+    if gemini_k and gemini_k.strip():
+        k = gemini_k.strip()
+        updates["GEMINI_API_KEY"] = k
+        os.environ["GEMINI_API_KEY"] = k
+
+    if ollama_url and ollama_url.strip():
+        u = ollama_url.strip()
+        updates["OLLAMA_BASE_URL"] = u
+        os.environ["OLLAMA_BASE_URL"] = u
+
+    if router_m and router_m.strip():
+        updates["MODU_MODEL"] = router_m.strip()
+        os.environ["MODU_MODEL"] = router_m.strip()
+
+    if answer_m and answer_m.strip():
+        updates["MODU_ANSWER_MODEL"] = answer_m.strip()
+        os.environ["MODU_ANSWER_MODEL"] = answer_m.strip()
+
     try:
-        from langchain.chat_models import init_chat_model
-        test_llm = init_chat_model(MODEL, temperature=0, timeout=10)
-        res = test_llm.invoke("Hi")
-        return "✅ OpenAI API 연결 성공! API Key가 정상 작동합니다."
+        update_env_file(updates)
     except Exception as e:
-        return f"❌ OpenAI API 연결 실패: {str(e)}"
+        return f"⚠️ .env 저장 오류: {e}", get_provider_status_text()
+
+    ok, reload_msg = reload_system_models()
+    status_text = get_provider_status_text()
+    if ok:
+        return f"✅ **{PROVIDER_PRESETS[p]['label']}** 설정이 성공적으로 저장 및 시스템에 즉시 적용되었습니다! ({reload_msg})", status_text
+    else:
+        return f"⚠️ 저장은 되었으나 모델 리로드 실패: {reload_msg}", status_text
+
+
+def test_provider_connection(provider, test_key, test_url, test_model):
+    p = provider.lower()
+    if p not in PROVIDER_PRESETS:
+        p = "openai"
+
+    preset = PROVIDER_PRESETS[p]
+    m_name = (test_model or "").strip() or preset["router"]
+
+    kwargs = {"temperature": 0, "timeout": 15}
+    if p == "openai":
+        k = (test_key or "").strip() or os.environ.get("OPENAI_API_KEY", "")
+        if not k:
+            return "⚠️ OpenAI API Key가 입력되지 않았습니다."
+        kwargs["api_key"] = k
+    elif p == "anthropic":
+        k = (test_key or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not k:
+            return "⚠️ Anthropic API Key가 입력되지 않았습니다."
+        kwargs["api_key"] = k
+    elif p == "google_genai":
+        k = (test_key or "").strip() or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+        if not k:
+            return "⚠️ Gemini API Key가 입력되지 않았습니다."
+        kwargs["api_key"] = k
+    elif p == "ollama":
+        u = (test_url or "").strip() or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        kwargs["base_url"] = u
+
+    try:
+        import time
+        from langchain.chat_models import init_chat_model
+        t0 = time.time()
+        test_llm = init_chat_model(m_name, model_provider=p, **kwargs)
+        res = test_llm.invoke("Hi! Reply with 'OK'.")
+        dur = round(time.time() - t0, 2)
+        reply = res.content if hasattr(res, "content") else str(res)
+        return f"✅ **{preset['label']}** ({m_name}) 연결 성공! (소요 시간: {dur}s, 응답: {reply[:30]})"
+    except Exception as e:
+        return f"❌ **{preset['label']}** ({m_name}) 연결 실패: {str(e)}"
 
 CUSTOM_CSS = """
 .container { max-width: 1200px; margin: 0 auto; }
@@ -185,9 +283,14 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
 
                 with gr.Column(scale=5):
                     gr.Markdown("### 🔍 에이전트 내부 관제 (Inspection)")
-                    with gr.Accordion("⚙️ API Key 빠른 확인 / 변경", open=False):
-                        quick_key_display = gr.Textbox(label="현재 적용된 Key", value=get_masked_api_key(), interactive=False)
-                        quick_key_input = gr.Textbox(label="새 OpenAI API Key 입력", type="password", placeholder="sk-proj-... 새 키 입력")
+                    with gr.Accordion("⚙️ LLM 및 API 설정 빠른 확인 / 변경", open=False):
+                        quick_status_display = gr.Markdown(get_provider_status_text())
+                        quick_provider_dd = gr.Dropdown(
+                            label="활성 LLM 제공자 전환",
+                            choices=["OpenAI", "Anthropic (Claude)", "Google (Gemini)", "로컬 LLM (Ollama)"],
+                            value={"openai": "OpenAI", "anthropic": "Anthropic (Claude)", "google_genai": "Google (Gemini)", "ollama": "로컬 LLM (Ollama)"}.get(os.environ.get("MODU_LLM_PROVIDER", "openai").lower(), "OpenAI")
+                        )
+                        quick_key_input = gr.Textbox(label="새 API Key (또는 Ollama URL) 입력", type="password", placeholder="새 키 또는 URL 입력 후 저장")
                         with gr.Row():
                             quick_save_btn = gr.Button("적용 및 저장 💾", variant="primary")
                             quick_test_btn = gr.Button("연결 테스트 🔍")
@@ -449,39 +552,130 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
             | **`escalate_to_agent`** | 👨‍💼 **인간 전문 상담원 정식 이관** | AI 응대 한계 또는 확신도 부족 시 컨텍스트와 함께 상담사 큐로 이관 |
             """)
 
-        with gr.Tab("⚙️ 환경 및 API Key 설정 (Settings)"):
-            gr.Markdown("## ⚙️ 시스템 환경 및 OpenAI API Key 설정")
-            gr.Markdown("에이전트가 사용하는 LLM 추론용 OpenAI API Key를 실시간으로 확인하고 안전하게 변경할 수 있습니다.")
+        with gr.Tab("⚙️ 멀티 LLM 환경 및 API 설정 (Settings)"):
+            gr.Markdown("## ⚙️ 시스템 환경 및 멀티 LLM (OpenAI · Claude · Gemini · 로컬 LLM) 설정")
+            gr.Markdown("OpenAI 뿐만 아니라 **Anthropic Claude**, **Google Gemini**, **로컬 LLM (Ollama)**까지 자유롭게 전환하고 API Key 및 접속 주소를 관리할 수 있습니다.")
             
             with gr.Row():
                 with gr.Column(scale=7):
-                    with gr.Group():
-                        gr.Markdown("### 🔑 OpenAI API Key 관리")
-                        setting_key_display = gr.Textbox(label="현재 적용된 API Key (보안 마스킹)", value=get_masked_api_key(), interactive=False)
-                        setting_key_input = gr.Textbox(label="새 OpenAI API Key 입력", type="password", placeholder="sk-proj- 또는 sk- 로 시작하는 새 API Key를 입력하세요...")
-                        with gr.Row():
-                            setting_save_btn = gr.Button("API Key 저장 및 시스템 적용 💾", variant="primary", scale=2)
-                            setting_test_btn = gr.Button("연결 상태 테스트 🔍", scale=1)
-                        setting_status_md = gr.Markdown("")
-                        gr.Markdown("> 💡 **안내**: 여기서 API Key를 저장하면 실행 중인 세션뿐만 아니라 `.env` 파일에도 영구 반영되어, 앱을 재시작해도 새 키가 유지됩니다.")
-                        
+                    provider_radio = gr.Radio(
+                        label="🎯 활성 LLM 제공자 (Active Provider) 선택",
+                        choices=["OpenAI", "Anthropic (Claude)", "Google (Gemini)", "로컬 LLM (Ollama)"],
+                        value={"openai": "OpenAI", "anthropic": "Anthropic (Claude)", "google_genai": "Google (Gemini)", "ollama": "로컬 LLM (Ollama)"}.get(os.environ.get("MODU_LLM_PROVIDER", "openai").lower(), "OpenAI")
+                    )
+                    
+                    with gr.Tabs():
+                        with gr.Tab("🟢 OpenAI"):
+                            openai_cur_key = gr.Textbox(label="현재 등록된 OpenAI API Key (마스킹)", value=get_masked_val("OPENAI_API_KEY"), interactive=False)
+                            openai_new_key = gr.Textbox(label="새 OpenAI API Key 입력", type="password", placeholder="sk-proj-... 새 키 입력 (미입력 시 기존 키 유지)")
+                            
+                        with gr.Tab("🟣 Anthropic (Claude)"):
+                            anthropic_cur_key = gr.Textbox(label="현재 등록된 Anthropic API Key (마스킹)", value=get_masked_val("ANTHROPIC_API_KEY"), interactive=False)
+                            anthropic_new_key = gr.Textbox(label="새 Anthropic API Key 입력", type="password", placeholder="sk-ant-... 새 키 입력 (미입력 시 기존 키 유지)")
+                            
+                        with gr.Tab("🔵 Google (Gemini)"):
+                            gemini_cur_key = gr.Textbox(label="현재 등록된 Gemini API Key (마스킹)", value=get_masked_val("GEMINI_API_KEY"), interactive=False)
+                            gemini_new_key = gr.Textbox(label="새 Gemini API Key 입력", type="password", placeholder="AIzaSy... 새 키 입력 (미입력 시 기존 키 유지)")
+                            
+                        with gr.Tab("🟠 로컬 LLM (Ollama)"):
+                            ollama_url_input = gr.Textbox(label="Ollama Server Base URL", value=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"), placeholder="http://localhost:11434")
+                            gr.Markdown("> 💡 **로컬 LLM 안내**: 내 PC에서 Ollama(`ollama run llama3.1` 또는 `ollama run qwen2.5`)가 구동 중이어야 연결됩니다.")
+
+                    with gr.Row():
+                        setting_save_btn = gr.Button("선택한 설정 저장 및 시스템 즉시 적용 💾", variant="primary", scale=2)
+                        setting_test_btn = gr.Button("선택한 LLM 연결 상태 테스트 🔍", scale=1)
+                    setting_status_md = gr.Markdown("")
+                    gr.Markdown("> 💡 **안내**: 여기서 설정을 저장하면 세션 즉시 반영되며, `.env` 파일에도 저장되어 재시작 시에도 유지됩니다.")
+                    
                 with gr.Column(scale=5):
                     with gr.Group():
-                        gr.Markdown("### 🖥️ 현재 시스템 모델 사양")
-                        gr.Textbox(label="의도 분류 라우터 모델 (MODEL)", value=MODEL, interactive=False)
-                        gr.Textbox(label="답변 생성 엔진 모델 (ANSWER_MODEL)", value=ANSWER_MODEL, interactive=False)
+                        gr.Markdown("### 🤖 모델 사양 및 프리셋 세부 설정")
+                        setting_router_model = gr.Textbox(label="의도 분류 라우터 모델 (Router Model)", value=os.environ.get("MODU_MODEL", PROVIDER_PRESETS.get(os.environ.get("MODU_LLM_PROVIDER", "openai").lower(), PROVIDER_PRESETS["openai"])["router"]))
+                        setting_answer_model = gr.Textbox(label="답변 생성 엔진 모델 (Answer Model)", value=os.environ.get("MODU_ANSWER_MODEL", PROVIDER_PRESETS.get(os.environ.get("MODU_LLM_PROVIDER", "openai").lower(), PROVIDER_PRESETS["openai"])["answer"]))
+                        auto_preset_btn = gr.Button("선택된 제공자의 권장 모델로 채우기 🔄", size="sm")
                         gr.Textbox(label="영구 저장 환경 파일 (.env 위치)", value=str(BASE.parent / ".env"), interactive=False)
 
-    # API Key 설정 이벤트 핸들러 바인딩
-    def handle_save_key(new_k):
-        msg, masked = update_api_key(new_k)
-        return msg, masked, masked, ""
+    NAME_TO_KEY = {
+        "OpenAI": "openai",
+        "Anthropic (Claude)": "anthropic",
+        "Google (Gemini)": "google_genai",
+        "로컬 LLM (Ollama)": "ollama",
+    }
+    KEY_TO_NAME = {v: k for k, v in NAME_TO_KEY.items()}
 
-    quick_save_btn.click(handle_save_key, inputs=[quick_key_input], outputs=[quick_status_md, quick_key_display, setting_key_display, quick_key_input])
-    quick_test_btn.click(test_api_key, outputs=[quick_status_md])
+    def on_provider_change(p_name):
+        k = NAME_TO_KEY.get(p_name, "openai")
+        preset = PROVIDER_PRESETS.get(k, PROVIDER_PRESETS["openai"])
+        return preset["router"], preset["answer"]
 
-    setting_save_btn.click(handle_save_key, inputs=[setting_key_input], outputs=[setting_status_md, quick_key_display, setting_key_display, setting_key_input])
-    setting_test_btn.click(test_api_key, outputs=[setting_status_md])
+    provider_radio.change(on_provider_change, inputs=[provider_radio], outputs=[setting_router_model, setting_answer_model])
+    auto_preset_btn.click(on_provider_change, inputs=[provider_radio], outputs=[setting_router_model, setting_answer_model])
+
+    def handle_save_settings(p_name, o_k, a_k, g_k, o_url, r_m, a_m):
+        p_key = NAME_TO_KEY.get(p_name, "openai")
+        msg, status_text = save_multi_settings(p_key, o_k, a_k, g_k, o_url, r_m, a_m)
+        m_o = get_masked_val("OPENAI_API_KEY")
+        m_a = get_masked_val("ANTHROPIC_API_KEY")
+        m_g = get_masked_val("GEMINI_API_KEY")
+        m_u = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        p_label = KEY_TO_NAME.get(p_key, "OpenAI")
+        return msg, status_text, status_text, m_o, m_a, m_g, m_u, "", "", "", p_label
+
+    setting_save_btn.click(
+        handle_save_settings,
+        inputs=[provider_radio, openai_new_key, anthropic_new_key, gemini_new_key, ollama_url_input, setting_router_model, setting_answer_model],
+        outputs=[setting_status_md, setting_status_md, quick_status_display, openai_cur_key, anthropic_cur_key, gemini_cur_key, ollama_url_input, openai_new_key, anthropic_new_key, gemini_new_key, quick_provider_dd]
+    )
+
+    def handle_test_settings(p_name, o_k, a_k, g_k, o_url, r_m):
+        p_key = NAME_TO_KEY.get(p_name, "openai")
+        if p_key == "openai":
+            res = test_provider_connection(p_key, o_k, None, r_m)
+        elif p_key == "anthropic":
+            res = test_provider_connection(p_key, a_k, None, r_m)
+        elif p_key == "google_genai":
+            res = test_provider_connection(p_key, g_k, None, r_m)
+        else:
+            res = test_provider_connection(p_key, None, o_url, r_m)
+        return res
+
+    setting_test_btn.click(
+        handle_test_settings,
+        inputs=[provider_radio, openai_new_key, anthropic_new_key, gemini_new_key, ollama_url_input, setting_router_model],
+        outputs=[setting_status_md]
+    )
+
+    # 빠른 설정 패널 이벤트 핸들러
+    def handle_quick_save(p_name, key_or_url):
+        p_key = NAME_TO_KEY.get(p_name, "openai")
+        o_k = key_or_url if p_key == "openai" else None
+        a_k = key_or_url if p_key == "anthropic" else None
+        g_k = key_or_url if p_key == "google_genai" else None
+        o_url = key_or_url if p_key == "ollama" else None
+        preset = PROVIDER_PRESETS.get(p_key, PROVIDER_PRESETS["openai"])
+        r_m = preset["router"]
+        a_m = preset["answer"]
+        msg, status_text = save_multi_settings(p_key, o_k, a_k, g_k, o_url, r_m, a_m)
+        p_label = KEY_TO_NAME.get(p_key, "OpenAI")
+        return msg, status_text, p_label, ""
+
+    quick_save_btn.click(
+        handle_quick_save,
+        inputs=[quick_provider_dd, quick_key_input],
+        outputs=[quick_status_md, quick_status_display, provider_radio, quick_key_input]
+    )
+
+    def handle_quick_test(p_name, key_or_url):
+        p_key = NAME_TO_KEY.get(p_name, "openai")
+        preset = PROVIDER_PRESETS.get(p_key, PROVIDER_PRESETS["openai"])
+        return test_provider_connection(p_key, key_or_url, key_or_url, preset["router"])
+
+    quick_test_btn.click(
+        handle_quick_test,
+        inputs=[quick_provider_dd, quick_key_input],
+        outputs=[quick_status_md]
+    )
+
 
 if __name__ == "__main__":
     demo.launch(inbrowser=True, css=CUSTOM_CSS)

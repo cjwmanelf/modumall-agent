@@ -13,7 +13,7 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from config import CONF_THRESHOLD, MODEL
+from config import CONF_THRESHOLD, MODEL, create_chat_model
 from prompts import ROUTE_GUIDE
 
 class RouterState(TypedDict, total=False):
@@ -100,9 +100,7 @@ def llm_classify(state):
     """분류 노드 — LLM 버전. 이것이 기본값이다."""
     global _router_chain
     if _router_chain is None:
-        _router_chain = init_chat_model(
-            MODEL, temperature=0, timeout=60, max_retries=2
-        ).with_structured_output(RouteDecision)
+        _router_chain = create_chat_model("router").with_structured_output(RouteDecision)
     d = _router_chain.invoke(
         [("system", ROUTE_GUIDE), ("human", f"고객 문의: {state['question']}")])
     

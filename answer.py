@@ -14,18 +14,16 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from config import ANSWER_MODEL, MAX_TOOL_TURNS
+from config import ANSWER_MODEL, MAX_TOOL_TURNS, create_chat_model
 from context import build_answer_prompt
 from tools import TOOLS
 
 LC_TOOLS = [tool(fn) for fn in TOOLS.values()]
 
-# reasoning_effort="none" 인 이유: 이 등급의 모델은 추론 모드와 도구 호출을 함께 쓸 수 없어
-# 그냥 두면 400 을 돌려준다. 도구 호출 자체가 이미 여러 단계로 나뉜 추론이므로 꺼도 된다.
-llm_t = init_chat_model(ANSWER_MODEL, temperature=0, reasoning_effort="none",
-                        timeout=60, max_retries=2).bind_tools(LC_TOOLS)
+def get_answer_llm():
+    return create_chat_model("answer", temperature=0, timeout=60, max_retries=2).bind_tools(LC_TOOLS)
 
-LC_TOOLS = [tool(fn) for fn in TOOLS.values()]
+llm_t = get_answer_llm()
 
 
 class ToolState(TypedDict, total=False):

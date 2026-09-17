@@ -58,7 +58,7 @@ MODEL = os.environ.get("MODU_MODEL", default_router)
 ANSWER_MODEL = os.environ.get("MODU_ANSWER_MODEL", default_answer)
 
 CONF_THRESHOLD = 0.5          # 라우팅 확신도 임계값
-MAX_TOOL_TURNS = 3            # 도구 호출 루프 상한
+MAX_TOOL_TURNS = 5            # 도구 호출 루프 상한 (검색 + 세부조회 체이닝 지원)
 GUARDRAIL_RETRY = 1           # 가드레일 위반 시 재생성 횟수
 WORKERS = 12                  # 동시 호출 수. 요청 한도에 걸리면 낮춘다
 

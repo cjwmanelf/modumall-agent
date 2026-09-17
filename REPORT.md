@@ -100,8 +100,15 @@
 
 ---
 
-## 5. 파이프라인 구조도: LangGraph 아키텍처 다이어그램
+## 5. 파이프라인 구조도: LangGraph 노드 및 상태(State) 흐름
 
+### 5.1 전체 아키텍처 다이어그램 (Architecture & State Flow)
+
+아래 다이어그램은 고객 문의 인입부터 의도 분류(`route`), 어드민 전산 DB 도구 호출 루프(`tools`), 수치 역추적 가드레일(`guard`), 그리고 최종 답변 출력 또는 이관(`escalate`)에 이르는 LangGraph의 전체 노드 전이와 상태(`AgentState`) 흐름을 시각화한 구조도입니다.
+
+![파이프라인 전체 아키텍처 및 State 흐름도](docs/images/00_pipeline_architecture.png)
+
+#### 📋 Mermaid 파이프라인 코드
 ```mermaid
 flowchart TD
     Start([고객 문의 입력]) --> RouteNode[Node: route\n(의도 분류 & 게이트 판정)]
@@ -125,39 +132,78 @@ flowchart TD
     EscalateNode --> FinalEscalate([전문 상담원 큐 이관 완료])
 ```
 
-### 상태(State) 데이터 명세 (`AgentState`)
-* `question`: 고객 문의 원문
-* `route`: 판정된 카테고리 (`ORDER_PLACE`, `PRODUCT_INFO`, `SHIPPING`, `RETURN_REFUND`, `OTHER`)
-* `confidence`: 판정 확신도 점수 (0.0 ~ 1.0)
-* `action`: 판정 행동 (`HANDLE`, `ASK`, `ANSWER`, `ESCALATE`, `OUT_OF_SCOPE`)
-* `tools`: 호출된 도구 목록 리스트
-* `results`: 어드민 전산 DB 조회 결과 딕셔너리
-* `answer`: 생성된 답변 텍스트
-* `guardrail_ok`: 수치 검증 통과 여부 불리언
-* `attempts`: 생성 재시도 횟수
+### 5.2 노드 전이 및 조건부 엣지(Conditional Edge) 동작 원리
+1. **`START` ➔ `route` (Node: route)**:
+   - 고객의 질문과 이전 대화 이력을 결합하여 5개 라우트 중 하나로 분류하고, 판정 확신도(`confidence`)를 산출합니다.
+   - **조건부 분기 (`after_route`)**:
+     - `confidence >= 0.5` 이며 정상 분과(4개)인 경우: `action = "HANDLE"` ➔ **`answer` 노드로 전이**.
+     - `confidence < 0.5` 이거나 범위 밖(`OTHER`)인 경우: `action = "ESCALATE"` 또는 `"OUT_OF_SCOPE"` ➔ **`escalate` 노드로 전이**.
+2. **`answer` (Node: answer)**:
+   - 라우트에 매핑된 업무 매뉴얼 섹션만 동적으로 슬라이싱하여 컨텍스트로 주입합니다.
+   - 내부 도구 호출 그래프(`tool_app`)가 실행되어 LLM이 자율적으로 필요한 어드민 도구를 연쇄 호출(Chaining)합니다.
+   - **조건부 분기 (`after_answer`)**:
+     - 주문번호나 필수 식별자가 없어 고객에게 되묻는 경우: `action = "ASK"` ➔ **종료 (`END`)**.
+     - 외부 채널 주문(`is_external_channel`)인 경우: `action = "OUT_OF_SCOPE"` ➔ **`escalate` 노드로 전이**.
+     - 정상 답변이 생성된 경우: ➔ **`guard` 노드로 전이**.
+3. **`guard` (Node: guard)**:
+   - 생성된 답변 속 모든 숫자를 정규식으로 추출하고, 어드민 DB 조회 결과 및 고정 정책(기본 배송비 2,500원 등)의 허용 숫자 집합과 대조합니다.
+   - **조건부 분기 (`after_guard`)**:
+     - 수치 검증 통과(`guardrail_ok == True`): ➔ **안전한 최종 답변 출력 및 종료 (`END`)**.
+     - 수치 검증 실패(`guardrail_ok == False`) & 시도 1회: ➔ **`answer` 노드로 되돌아가 재수정 생성 (Self-Correction Loop)**.
+     - 수치 검증 2회 연속 실패: ➔ 환각 방지를 위해 즉시 **`escalate` 노드로 이관**.
+4. **`escalate` (Node: escalate)**:
+   - 사유(분류 확신도 미달, 가드레일 위반, 외부 채널 등)에 맞는 안전한 이관 안내 문구를 출력하고 전문 상담원 큐에 전달합니다.
+
+### 5.3 상태(State) 데이터 명세 (`AgentState`)
+| 키 이름 | 타입 | 리듀서 여부 | 설명 |
+| :--- | :--- | :---: | :--- |
+| `question` | `str` | 덮어쓰기 | 현재 턴의 고객 문의 원문 발화 |
+| `history` | `Annotated[list, operator.add]` | **누적 (리듀서)** | 턴마다 덮이지 않고 이전 대화 맥락이 계속 쌓이는 리스트 |
+| `route` | `str` | 덮어쓰기 | 분류된 5대 카테고리 (`ORDER_PLACE`, `PRODUCT_INFO`, `SHIPPING`, `RETURN_REFUND`, `OTHER`) |
+| `confidence`| `float` | 덮어쓰기 | 라우터 판정 확신도 점수 (0.0 ~ 1.0) |
+| `action` | `str` | 덮어쓰기 | 현재 턴의 최종 행동 (`HANDLE`, `ASK`, `ANSWER`, `ESCALATE`, `OUT_OF_SCOPE`) |
+| `tools` | `List[str]` | 덮어쓰기 | 해당 턴에서 실제로 호출된 쇼핑몰 어드민 전산 도구 목록 |
+| `results` | `dict` | 덮어쓰기 | 어드민 전산 DB 조회 결과 원본 딕셔너리 (가드레일 검증의 기준 데이터) |
+| `answer` | `str` | 덮어쓰기 | 최종 생성된 고객 응대 답변 문구 |
+| `guardrail_ok`| `bool` | 덮어쓰기 | 출처 없는 허위 수치 포함 여부 검증 결과 (`True` / `False`) |
+| `attempts` | `int` | 덮어쓰기 | 가드레일 위반 시 답변 재생성 시도 횟수 (최대 2회) |
 
 ---
 
 ## 6. 데모 설계: 웹 GUI 구성 및 실시간 내부 관제
 
-### 6.1 Gradio 기반 웹 인터페이스 (`app_gui.py`)
-누구나 직관적으로 시스템을 체험하고 검증할 수 있도록 5개의 탭으로 구성된 통합 대시보드를 구축했습니다.
+### 6.1 Gradio 기반 웹 대시보드 화면 캡처 및 화면별 설계 의도
 
-1. **💬 실시간 상담 및 관제 (Chat & Inspector)**:
-   - 좌측: 챗봇 대화창 및 5대 대표 추천 질문 버튼.
-   - 우측: **투명한 내부 관제(Inspection) 패널** — 현재 분류된 라우트, 확신도, 판정 행동(Action), 호출된 도구 목록, 수치 가드레일 통과 여부, 어드민 DB 원본 JSON 실시간 시각화.
-2. **📊 평가 벤치마크 (Evaluation)**:
-   - 원클릭 버튼으로 120건 라우팅 채점 및 32건 골든셋 답변 채점 실행.
-   - 혼동 행렬(Confusion Matrix) 및 실패 상세 분석 HTML 렌더링.
-3. **🏆 공식 실험 기록서 (Experiment Log)**:
-   - #0부터 #5까지의 회차별 수정 이유, 조치 내용, 전/후 수치 변화표 상시 열람.
-4. **📖 라우트 및 업무 매뉴얼 규정**:
-   - 5대 라우트 정의, 프롬프트 행동 수칙, 8대 어드민 전산 도구 명세서.
-5. **⚙️ 멀티 LLM 환경 및 API 설정 (Settings)**:
-   - OpenAI, Anthropic Claude, Google Gemini, 로컬 LLM(Ollama) 원클릭 전환 및 실시간 연결 핑 테스트 기능.
+누구나 직관적으로 시스템을 체험하고 검증할 수 있도록 5개의 탭으로 구성된 전문 통합 대시보드(`app_gui.py`)를 구축했습니다.
 
-### 6.2 데모 화면 구성의 핵심 가치
-* **블랙박스 해소**: AI가 어떤 이유로 해당 답변을 냈는지 어드민 조회 결과와 가드레일 상태를 함께 보여줌으로써 상담원의 신뢰도를 극대화했습니다.
+#### ① 💬 실시간 고객 상담 및 투명한 내부 관제 (Chat & Inspector)
+![실시간 고객 상담 및 내부 관제 화면](docs/images/01_chat_inspector.png)
+* **좌측 (상담 대화창)**:
+  - 친숙한 메신저 UI와 함께, 사용자가 시스템의 핵심 기능(카테고리별 무료배송 판정, 세트 단품 구매 불가 규정, 출고 마감 시각 안내, 주문 제작 반품 불가, 타사 A/S 범위 밖 안내)을 클릭 한 번으로 테스트할 수 있는 **5대 추천 질문 프리셋 버튼**을 배치했습니다.
+* **우측 (에이전트 내부 관제 패널 - Inspection)**:
+  - **AI 블랙박스 문제 해소**: AI 모델이 왜 이런 답변을 냈는지 알 수 없는 문제를 해결하기 위해, 현재 대화의 **분류 라우트(Route), 판정 확신도(Confidence), 행동 유형(Action), 호출된 어드민 전산 도구(Tools), 수치 가드레일 검증 통과 여부(Guardrail), 어드민 DB 원본 JSON**을 실시간으로 투명하게 노출합니다.
+  - 상담원이 AI의 판단 근거를 실시간으로 교차 검증할 수 있어 실제 현장 도입 시 신뢰도를 극대화했습니다.
+
+#### ② 📊 평가 벤치마크 (Evaluation)
+![평가 벤치마크 화면](docs/images/02_benchmark.png)
+* **원클릭 실시간 성능 측정**:
+  - 버튼 클릭 한 번으로 120건의 의도 분류 평가셋과 32건의 골든셋 답변 채점을 즉시 백그라운드 병렬 실행(`pmap`)하여 수 초 내에 결과를 도출합니다.
+* **정량적 스코어 카드 및 혼동 행렬 시각화**:
+  - 분류 정확도(100.0%), Macro F1(1.000), 1턴 답변 통과율(100.0%)을 한눈에 볼 수 있는 메트릭 카드를 상단에 배치했습니다.
+  - 4대 분과 간의 전이 관계를 보여주는 **혼동 행렬(Confusion Matrix)** 및 오답 분석표를 HTML 테이블로 깔끔하게 렌더링하여 시스템 취약점을 즉각 파악할 수 있습니다.
+
+#### ③ 🏆 공식 실험 기록서 (Experiment Log)
+![공식 실험 기록서 화면](docs/images/03_experiment_log.png)
+* **과학적 가설-검증 기록 관리**:
+  - 베이스라인(#0)부터 최종 만점(#5)까지의 6단계 성능 개선 과정을 **[변경 대상 - 변경 이유(Why) - 핵심 조치 내용(What) - 전/후 성능 수치 - 오답 분석 메모]** 5개 축으로 정리한 정규 실험 일지표를 웹 UI 내에 영구 내장했습니다.
+  - 심사위원이나 동료 개발자가 별도의 외부 문서를 열어보지 않고도 GUI 상에서 시스템의 발전 과정을 즉시 확인할 수 있도록 설계했습니다.
+
+#### ④ ⚙️ 멀티 LLM 환경 및 API 설정 (Multi-Provider Settings)
+![멀티 LLM 환경 설정 화면](docs/images/04_settings_multi_llm.png)
+* **특정 벤더 종속 탈피 (Vendor-Lock Free)**:
+  - OpenAI(`gpt-4o`), Anthropic Claude(`claude-3-7-sonnet`), Google Gemini(`gemini-2.5-pro`), 로컬 오프라인 LLM Ollama(`llama3.1`) 중 원하는 모델을 드롭다운으로 선택하여 실시간 전환할 수 있습니다.
+* **실시간 연결 핑 테스트 및 Hot-Reload**:
+  - 입력한 API 키가 유효한지 즉시 핑을 날려 확인하는 연결 테스트 기능과, 시스템 재시작 없이 새 모델을 즉시 에이전트에 반영하는 무중단 리로드(Hot-Reload) 파이프라인을 구축했습니다.
 
 ---
 

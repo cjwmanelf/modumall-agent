@@ -209,7 +209,15 @@ def process_chat(message, history, session_id):
         return "", history, "대기 중", "0.00", "대기 중", "[]", "대기 중", "{}"
     
     cfg = {"configurable": {"thread_id": session_id}}
-    out = chat_app.invoke({"question": message}, cfg)
+    try:
+        out = chat_app.invoke({"question": message}, cfg)
+    except Exception as e:
+        err_msg = f"⚠️ 에이전트 실행 중 오류가 발생했습니다: {str(e)}"
+        if history is None:
+            history = []
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": err_msg})
+        return "", history, "ERROR", "0.00", "ERROR", "[]", f"❌ 예외 발생: {str(e)}", "{}"
     
     answer = out.get("answer", "답변을 생성하지 못했습니다.")
     route = out.get("route", "-")

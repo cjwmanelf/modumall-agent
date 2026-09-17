@@ -90,9 +90,6 @@ def create_chat_model(role: str = "router", provider: str = None, model_name: st
 
     if p == "openai":
         api_key = os.environ.get("OPENAI_API_KEY")
-        # o1, o3, gpt-5 등 특정 모델 reasoning_effort 처리
-        if role == "answer" and not any(x in model_name for x in ["o1", "o3", "o4"]):
-            call_kwargs["reasoning_effort"] = "none"
         return init_chat_model(model_name, model_provider="openai", api_key=api_key, **call_kwargs)
 
     elif p == "anthropic":

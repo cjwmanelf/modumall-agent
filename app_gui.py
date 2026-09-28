@@ -183,13 +183,36 @@ def test_provider_connection(provider, test_key, test_url, test_model):
         return f"❌ **{preset['label']}** ({m_name}) 연결 실패: {str(e)}"
 
 CUSTOM_CSS = """
-.container { max-width: 1200px; margin: 0 auto; }
+.container { max-width: 96% !important; margin: 0 auto !important; }
 .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 13px; }
 .badge-route { background-color: #2563eb; color: white; }
 .badge-action { background-color: #10b981; color: white; }
 .metric-box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; background-color: #f9fafb; text-align: center; }
 .metric-val { font-size: 28px; font-weight: bold; color: #1d4ed8; }
 .metric-lbl { font-size: 13px; color: #6b7280; margin-top: 4px; }
+
+/* 탭 메뉴를 한 줄에 다 보이게 강제하고 ... 넘침 버튼 방지 */
+.tabs > .tab-nav, div[role="tablist"], .tab-nav {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    white-space: nowrap !important;
+    gap: 4px !important;
+    border-bottom: 2px solid #e2e8f0 !important;
+    scrollbar-width: thin !important;
+}
+.tabs > .tab-nav > button, div[role="tablist"] > button, .tab-nav > button {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    padding: 9px 15px !important;
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.2px !important;
+}
+/* Gradio 탭 오버플로우 ... 드롭다운 숨기기 */
+.tabs > .tab-nav > .overflow-menu, div[role="tablist"] > .overflow-menu, .tab-nav > .overflow-menu {
+    display: none !important;
+}
 
 .exp-container { width: 100%; overflow-x: auto; margin-top: 10px; }
 .exp-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
@@ -422,7 +445,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
     gr.Markdown("실시간 라우팅(의도 분류), 어드민 DB 그라운딩 조회, 수치 검증 가드레일이 통합된 고객 상담 시스템입니다.")
     
     with gr.Tabs():
-        with gr.Tab("🛡️ 사람이 승인하는 에이전트 (HITL 관제 센터)"):
+        with gr.Tab("🛡️ 사람 승인 에이전트 (HITL)"):
             gr.Markdown("### 🛡️ Human-in-the-Loop: 비가역적 액션(고객 알림톡/문자 발송) 전 안전 승인 심사대")
             gr.Markdown("""
             > **💡 원칙 (10초 안에 판단할 수 있는 화면)**:  
@@ -550,7 +573,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
             b_cs4.click(lambda: ("배송 지연으로 행사를 망쳤으니 전액 배상하고 소비자원에 고소하기 전에 대표랑 통화하게 해주세요.", "정다은"), outputs=[in_q, in_cust])
             b_cs5.click(lambda: ("수제 가죽가방 반품하고 싶은데 왕복 배송비는 제가 내나요?", "최재훈"), outputs=[in_q, in_cust])
 
-        with gr.Tab("📊 멈춤 기준 검증 벤치마크 (기준별 비교표)"):
+        with gr.Tab("📊 멈춤 기준 벤치마크"):
             gr.Markdown("### 📊 멈춤 기준 검증하기 (개입률 · 놓침 · 헛멈춤)")
             gr.Markdown("""
             > **기준을 정했다고 끝이 아닙니다.** 그 기준으로 실제로 무엇이 멈추고 무엇이 빠져나가는지 확인해야 합니다.  
@@ -582,7 +605,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
                 outputs=[bench_table_display]
             )
 
-        with gr.Tab("💬 실시간 상담 및 관제 (Chat & Inspector)"):
+        with gr.Tab("💬 실시간 고객 상담"):
             with gr.Row():
                 with gr.Column(scale=7):
                     chatbot = gr.Chatbot(label="상담 대화창", height=450)
@@ -667,7 +690,7 @@ with gr.Blocks(title="모두몰 고객 응대 AI 에이전트") as demo:
                 process_chat, inputs=[msg_input, chatbot, session_id_state],
                 outputs=[msg_input, chatbot, route_box, conf_box, action_box, tools_box, guard_box, raw_json]
             )
-        with gr.Tab("📊 평가 벤치마크"):
+        with gr.Tab("📈 AI 성능 평가"):
             gr.Markdown("### 🏆 2대 핵심 성능 지표 실시간 측정")
             with gr.Row():
                 with gr.Column():
